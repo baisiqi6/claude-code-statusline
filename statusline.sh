@@ -2,6 +2,7 @@
 # Claude Code Status Line
 # Reads JSON from stdin, outputs formatted status bar
 # Dependencies: jq, bc
+# Progress bar auto-fills remaining terminal width
 
 read -r json
 
@@ -21,7 +22,6 @@ cwd=$(echo "$json" | jq -r '.workspace.current_dir // empty')
 # Filters out mentions in conversation text and tool outputs
 
 claude_dir="$HOME/.claude"
-# Find the project scope directory that contains this session's JSONL
 jsonl=""
 for proj_dir in "$claude_dir"/projects/*/; do
   candidate="${proj_dir}${session_id}.jsonl"
@@ -51,19 +51,7 @@ in_fmt=$(format_tok "$in_tok")
 out_fmt=$(format_tok "$out_tok")
 max_fmt=$(format_tok "$max_ctx")
 
-# Progress bar (20 chars wide)
-bar_width=20
-filled=$(( pct_int * bar_width / 100 ))
-if [ "$filled" -gt "$bar_width" ]; then
-  filled=$bar_width
-fi
-empty=$(( bar_width - filled ))
-
-bar=""
-for ((i=0; i<filled; i++)); do bar+="█"; done
-for ((i=0; i<empty; i++)); do bar+="░"; done
-
-# Color based on usage
+# --- Colors ---
 if [ "$pct_int" -lt 50 ]; then
   color="\033[32m"
 elif [ "$pct_int" -lt 80 ]; then
@@ -74,6 +62,40 @@ fi
 reset="\033[0m"
 dim="\033[2m"
 
+# --- Auto-width: calculate bar size from terminal width ---
+term_width="${COLUMNS:-$(tput cols 2>/dev/null)}"
+: "${term_width:=80}"
+
+# Strip ANSI escape sequences to get visual character count
+strip_ansi() {
+  sed $'s/\e\[[0-9;]*m//g' <<< "$1"
+}
+
+# Build non-bar text segments (plain text, no ANSI)
+non_bar_text="${model}  ${pct_int}%  ↑${in_fmt} ↓${out_fmt} /${max_fmt}  compact:${count}"
+if [ -n "$cwd" ]; then
+  non_bar_text="${non_bar_text}  $(basename "$cwd")"
+fi
+
+# Visual width of non-bar parts + spacing (2 spaces around bar)
+non_bar_visual=$(strip_ansi "$non_bar_text" | wc -m | tr -d ' ')
+bar_width=$(( term_width - non_bar_visual - 2 ))
+if [ "$bar_width" -lt 5 ]; then
+  bar_width=5
+fi
+
+# Build progress bar
+filled=$(( pct_int * bar_width / 100 ))
+if [ "$filled" -gt "$bar_width" ]; then
+  filled=$bar_width
+fi
+empty=$(( bar_width - filled ))
+
+bar=""
+for ((i=0; i<filled; i++)); do bar+="█"; done
+for ((i=0; i<empty; i++)); do bar+="░"; done
+
+# --- Output ---
 dir_suffix=""
 if [ -n "$cwd" ]; then
   dir_suffix="  ${dim}$(basename "$cwd")${reset}"
